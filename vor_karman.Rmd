@@ -1,0 +1,321 @@
+---
+title: "St number of Von Kàrman vorticies, replicated at home"
+author: "Magnus J. Moldekleiv"
+output: html_document
+---
+
+### Motivation
+As I was doing the course on Turbulent Flows, I wanted to see if I could replicate a turbulent classic - the Von Kàrman vorticies - at home. The main idea was to leverage Galilean invariance - i.e that to the N.S equations (incompressible with linear rheology) it does not matter whether the cylinder or the water is moving if we are moving at constant velocity (inertial reference frame) - to cheaply investigate the vortex shedding frequency behind a cylinder by moving the cylinder itself instead of flowing water around it, as is commonly done.
+
+
+### The *"experimental"* experimental setup
+For a suitable and available container, I chose a bathtub. This was filled with water, to which a small amount of startch (potato-flour) and some blue food-dye was added, as I (after some trial and error) found this produced quite nice and visible vorticies. To try and get a smooth pull, I decided to try a gravity-assisted pull - i.e using an adjustable weight (yellow water bottle) tied to the cylinder with some fishing line. This explains the clothes rack in the image below, as I needed some way as to redirect the string forces, with the smooth metal of the rack acting as makeshift pullies. 
+A metre-stick was added to serve as a reference for the velocity estimation from the videos.
+
+
+![The "experimental" setup](images/Oppsett.jpg)
+Note that due to problems with friction against the bottom of the tub, runs were performed with both gravity pull and by pulling the cylinder by hand against the resistance of the bottle (it is easier to pull smooth if it is against a resistance).
+
+### Limitations and run selections
+There are many possible sources of noise in the data, here are a few that I can think of:
+- We could have viscous effects from interactions with the bottom of the bathtub.
+- There could be effects from the walls on the cylinder.
+- The cylinder speed was not quite constant in all runs, nor quite straight lined (i.e swayed from side to side)
+- The additives to the water could have changed the fluids properties.
+ect. After all, it was a bathtub.
+
+Additionally, due to the minimal setup not too many runs were suitable for analysis - either the speeds were too higi, making the Von Karman vorticies hard to distinguish from other turbulence, or the speed was *really* uneven (stop/start motion from cylinder rubbing on the bathtub). After selecting based on the smoothness of the cylinder motion and the visibility of vorticies, we were left with 7 runs for further analysis.
+
+### AI disclaimer
+While I know how to write R code, I am not the best R programmer and neither is that the point of this document. Most of the code is written by GPT codex 3, and all code has been reviewed by me.
+
+### Code and data analysis 
+The velocity of the cylinder was found using the open source physics software Tracker, via calibrating size to the reference stick then using autotracking. The data was then exported is .csv format to .txt files. These are what we will be working on moving forwards. 
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)
+
+source("scripts/01_tracker_io_format.R")
+source("scripts/02_tracker_helpers.R")
+```
+
+### Load and format all CSV files
+The loading and formatting are handled by script modules in `scripts/`.
+```{r data loading and processing, message=F, warning=F}
+# Define files explicitly (one dataframe will be created per file).
+file_names <- c(
+  "med_hand_jamt_drag_middels_hastighet_2.csv",
+  "med_hand_jamt_drag_382_671.txt",
+  "med_hand_jamt_drag_middels_hastighet_222_408.txt",
+  "med_hand_jamt_drag_middels-hoy_hastighet_095_295.txt",
+  "med_trad_jamt_og_langt_drag__335.txt",
+  "med_trad_okHastighet_langt_drag__389.txt",
+  "med_trad_okHastighet_1_315.txt"
+)
+
+# Manual vortex counts (to the best of my ability) in the same order as file_names
+vortex_counts <- c(11,9,10,9,13,12,8)
+
+tracker_dfs <- load_tracker_dataframes_from_files(
+  file_names = file_names,
+  data_dir = "."
+)
+
+manual_vortex_counts <- map_manual_vortex_counts(file_names, vortex_counts)
+tracker_dfs <- add_manual_vortex_count_column(tracker_dfs, manual_vortex_counts)
+
+length(tracker_dfs)
+names(tracker_dfs)
+```
+
+### Counting the vorticies
+The vorticies in each video analyzed were counted by hand. In some cases this was not too difficult, for as seen here where 6 vorticies are clearly visible downstream, and one seems to be developing in the turbulence behind the cylinder (*note that contrast and sharpness has been slightly enhanced to make the turbulence more visible in the image*):
+![Clear vortex street visible after cylinder, Re = 3694](images/von_karman_sample_street.png)
+In other cases, this was a lot more difficult (*Note: gamma has been adjusted a lot in the below image to increase visibility*):
+![A not so simple to count vortex street](images/not_so_easy_von_karman_street.png)
+
+As such, the vortex counts should be treated as rough estimates at best. In spite of this, as we will see later, the results still appear aligned with the literature. 
+
+
+### Velocity overview
+```{r velocity sanity check}
+velocity_overview <- purrr::imap_dfr(tracker_dfs, function(df_video, file_name) {
+  tibble(
+    video_file = file_name,
+    mean_velocity = mean(df_video$v, na.rm = TRUE),
+    sd_velocity = sd(df_video$v, na.rm = TRUE)
+  )
+})
+
+velocity_overview
+```
+
+### Summary dataframe per video
+```{r Summary frame and calculations}
+# Setup values
+characteristic_length_m   <- 0.03   # cylinder diameter diameter in meters
+kinematic_viscosity_m2_s  <- 1e-6   # water at ~20 C
+
+
+summary_df <- purrr::imap_dfr(tracker_dfs, function(df_video, file_name) {
+  fallback_index <- match(file_name, names(tracker_dfs))
+
+  mean_velocity <- mean(df_video$v, na.rm = TRUE)
+  time_s <- max(df_video$t, na.rm = TRUE) - min(df_video$t, na.rm = TRUE)
+
+  manual_count <- unique(stats::na.omit(df_video$manual_vortex_count))
+  manual_count <- if (length(manual_count) > 0) manual_count[[1]] else NA_real_
+
+  total_vorticies <- if (!is.na(manual_count)) {
+    as.numeric(manual_count)
+  } 
+
+  #Calculating dimensionless groups
+  shedding_frequency_hz <- (total_vorticies / 2) / time_s
+  Re <- (mean_velocity * characteristic_length_m) / kinematic_viscosity_m2_s
+  St <- (shedding_frequency_hz * characteristic_length_m) / mean_velocity
+
+  tibble(
+    run_number = fallback_index,
+    video_index = extract_video_index(file_name, fallback_index),
+    video_file = file_name,
+    mean_velocity = mean_velocity,
+    total_vorticies = total_vorticies,
+    time = time_s,
+    Re = Re,
+    St = St
+  )
+})
+
+summary_df
+```
+
+### Plotting and visualization
+```{r}
+plot(
+  x = summary_df$Re,
+  y = summary_df$St,
+  pch = 19,
+  col = "blue",
+  xlab = "Re",
+  ylab = "St",
+  main = "Strouhal Number vs Reynolds Number"
+)
+
+#Adding a red point for the outlier
+points(
+  x = summary_df$Re[summary_df$run_number == 7],
+  y = summary_df$St[summary_df$run_number == 7],
+  pch = 19,
+  col = "red"
+)
+```
+
+### Correlation
+As St should be fairly constant for Re, we would expect a Pearsons correlation coefficient close to 0. We will do this with and without the outlier (red dot in above plot). (*Note, cor.test also calculates p values ect*)
+```{r statistics}
+cor.test(summary_df$Re, summary_df$St)
+cor.test(summary_df$Re[summary_df$run_number != 7], summary_df$St[summary_df$run_number != 7])
+```
+*Correlation is value below "cor" in above output*
+
+Key point is that without the outlier, we get a correlation close to 0. Also note that for both calculations we do not have the statistical power to say that either correlation is meaningfully (p < 0.05) different from 0.
+
+### Ensemble averaging
+As the Strohaul Number in the irregular range ($300 < Re < 10^4$) is reported to be approximately constant compared to Re (Roshko, 1954), we can meaningfully take the ensemble average over all runs to approximate the actual St. As with the previous cell, this will be done with and without the outlier.
+```{r ensemble averaging and final results}
+outlier_run_number <- 7
+
+ensemble_with_outlier <- summary_df %>%
+  summarise(
+    mean_velocity = mean(mean_velocity, na.rm = TRUE),
+    mean_Re = mean(Re, na.rm = TRUE),
+    mean_St = mean(St, na.rm = TRUE),
+    n_runs = dplyr::n()
+  ) %>%
+  mutate(comment = "With outlier run")
+
+ensemble_without_outlier <- summary_df %>%
+  filter(run_number != outlier_run_number) %>%
+  summarise(
+    mean_velocity = mean(mean_velocity, na.rm = TRUE),
+    mean_Re = mean(Re, na.rm = TRUE),
+    mean_St = mean(St, na.rm = TRUE),
+    n_runs = dplyr::n()
+  ) %>%
+  mutate(comment = "Without outlier run")
+
+ensemble_results <- bind_rows(ensemble_with_outlier, ensemble_without_outlier) %>%
+  select(comment, n_runs, mean_velocity, mean_Re, mean_St)
+
+ensemble_results
+```
+
+### Using bootstrapping for confidence interval
+**Assuming my runs are representative of the underlying population**, we can use bootstrapping with the boot library in R to estimate the confidence interval.
+```{r confidence interval}
+bootstrap_mean_draws <- function(x, R = 10000, seed = 42) {
+  x <- x[!is.na(x)]
+
+  if (length(x) < 2) {
+    return(numeric(0))
+  }
+
+  mean_stat <- function(data, indices) {
+    mean(data[indices])
+  }
+
+  set.seed(seed)
+  boot_obj <- boot::boot(
+    data = x,
+    statistic = mean_stat,
+    R = R,
+    sim = "ordinary"
+  )
+
+  as.numeric(boot_obj$t)
+}
+
+bootstrap_ci_row <- function(x, boot_draws, R, conf = 0.95, comment = "") {
+  x <- x[!is.na(x)]
+  n <- length(x)
+
+  if (n < 2 || length(boot_draws) == 0) {
+    return(tibble::tibble(
+      comment = comment,
+      method = "Bootstrap percentile CI",
+      R = R,
+      n = n,
+      mean_St = mean(x),
+      bootstrap_se = NA_real_,
+      ci95_lower = NA_real_,
+      ci95_upper = NA_real_
+    ))
+  }
+
+  alpha <- (1 - conf) / 2
+  ci_bounds <- stats::quantile(
+    boot_draws,
+    probs = c(alpha, 1 - alpha),
+    na.rm = TRUE,
+    names = FALSE
+  )
+
+  tibble::tibble(
+    comment = comment,
+    method = "Bootstrap percentile CI",
+    R = R,
+    n = n,
+    mean_St = mean(x),
+    bootstrap_se = stats::sd(boot_draws),
+    ci95_lower = ci_bounds[[1]],
+    ci95_upper = ci_bounds[[2]]
+  )
+}
+
+R_boot <- 10000
+
+st_with_outlier <- summary_df$St
+st_without_outlier <- summary_df$St[summary_df$run_number != outlier_run_number]
+
+boot_draws_with_outlier <- bootstrap_mean_draws(st_with_outlier, R = R_boot, seed = 42)
+boot_draws_without_outlier <- bootstrap_mean_draws(st_without_outlier, R = R_boot, seed = 43)
+
+ci_with_outlier <- bootstrap_ci_row(
+  x = st_with_outlier,
+  boot_draws = boot_draws_with_outlier,
+  R = R_boot,
+  conf = 0.95,
+  comment = "With outlier run"
+)
+
+ci_without_outlier <- bootstrap_ci_row(
+  x = st_without_outlier,
+  boot_draws = boot_draws_without_outlier,
+  R = R_boot,
+  conf = 0.95,
+  comment = "Without outlier run"
+)
+
+ci_results <- bind_rows(ci_with_outlier, ci_without_outlier) %>%
+  select(comment, method, R, n, mean_St, bootstrap_se, ci95_lower, ci95_upper)
+
+ci_results
+
+old_par <- par(no.readonly = TRUE)
+par(mfrow = c(1, 2), mar = c(4, 4, 4, 1))
+
+hist(
+  boot_draws_with_outlier,
+  breaks = "FD",
+  col = "gray85",
+  border = "white",
+  main = "Bootstrap mean St\nWith outlier",
+  xlab = "Bootstrap mean St"
+)
+abline(v = ci_with_outlier$mean_St, col = "blue", lwd = 2)
+abline(v = c(ci_with_outlier$ci95_lower, ci_with_outlier$ci95_upper), col = "red", lwd = 2, lty = 2)
+legend("topright", legend = c("Mean", "95% CI"), col = c("blue", "red"), lwd = 2, lty = c(1, 2), bty = "n", cex = 0.8)
+
+hist(
+  boot_draws_without_outlier,
+  breaks = "FD",
+  col = "gray85",
+  border = "white",
+  main = "Bootstrap mean St\nWithout outlier",
+  xlab = "Bootstrap mean St"
+)
+abline(v = ci_without_outlier$mean_St, col = "blue", lwd = 2)
+abline(v = c(ci_without_outlier$ci95_lower, ci_without_outlier$ci95_upper), col = "red", lwd = 2, lty = 2)
+legend("topright", legend = c("Mean", "95% CI"), col = c("blue", "red"), lwd = 2, lty = c(1, 2), bty = "n", cex = 0.8)
+
+par(old_par)
+```
+Based on the data in Roshko (1954), we expect a St number around 0.21, which is within the 95% confidence interval when we include the outlier, and just outside the confidence interval without the outlier (*note: but not outside both if confidence intervals are found assuming an underlying normal distribution*). 
+
+A final note on the distributions: As expected due the law of large numbers, both distributions appear approximately normal, but interestingly we see some skewness in the distribution that includes the outlier - perhaps indicative that this is truly an outlier, i.e the belongs to a different population than the other runs.
+
+
+### References
+Roshko, Anatol. 1954. ‘On the Development of Turbulent Wakes from Vortex Streets’.
+Available at: https://ntrs.nasa.gov/citations/19930092207
