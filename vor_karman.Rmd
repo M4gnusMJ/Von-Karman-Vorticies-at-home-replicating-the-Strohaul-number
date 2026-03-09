@@ -5,7 +5,7 @@ output: html_document
 ---
 
 ### Motivation
-As I was doing the course on Turbulent Flows, I wanted to see if I could replicate a turbulent classic - the Von Kàrman vorticies - at home. The main idea was to leverage Galilean invariance - i.e that to the N.S equations (incompressible with linear rheology) it does not matter whether the cylinder or the water is moving if we are moving at constant velocity (inertial reference frame) - to cheaply investigate the vortex shedding frequency behind a cylinder by moving the cylinder itself instead of flowing water around it, as is commonly done.
+As I was doing the course on Turbulent Flows, I wanted to see if I could replicate a turbulent classic - the Von Kàrman vorticies - at home. The main idea was to leverage Galilean invariance - i.e invariance to inertial reference frames - to cheaply investigate the vortex shedding frequency behind a cylinder by moving the cylinder itself instead of flowing water around it, as is commonly done.
 
 
 ### The *"experimental"* experimental setup
@@ -20,17 +20,17 @@ Note that due to problems with friction against the bottom of the tub, runs were
 There are many possible sources of noise in the data, here are a few that I can think of:
 - We could have viscous effects from interactions with the bottom of the bathtub.
 - There could be effects from the walls on the cylinder.
-- The cylinder speed was not quite constant in all runs, nor quite straight lined (i.e swayed from side to side)
+- The cylinder speed was not constant in all runs, nor straight lined (i.e swayed slightly from side to side). Thus we cannot say galilean invariance actually holds.
 - The additives to the water could have changed the fluids properties.
 ect. After all, it was a bathtub.
 
-Additionally, due to the minimal setup not too many runs were suitable for analysis - either the speeds were too higi, making the Von Karman vorticies hard to distinguish from other turbulence, or the speed was *really* uneven (stop/start motion from cylinder rubbing on the bathtub). After selecting based on the smoothness of the cylinder motion and the visibility of vorticies, we were left with 7 runs for further analysis.
+Additionally, due to the minimal setup not too many runs were suitable for analysis - either the speeds were high, making the Von Karman vorticies hard to distinguish from surrounding turbulence, or the speed was *really* uneven (e.x stop/start motion from cylinder rubbing on the bathtub). After selecting based on the smoothness of the cylinder motion and the visibility of vorticies, we were left with 7 runs for further analysis.
 
 ### AI disclaimer
-While I know how to write R code, I am not the best R programmer and neither is that the point of this document. Most of the code is written by GPT codex 3, and all code has been reviewed by me.
+While I know how to write R code, I am not the best R programmer and neither is that the point of this document. Most of the code is written by GPT codex 3, and has been reviewed by me.
 
 ### Code and data analysis 
-The velocity of the cylinder was found using the open source physics software Tracker, via calibrating size to the reference stick then using autotracking. The data was then exported is .csv format to .txt files. These are what we will be working on moving forwards. 
+The velocity of the cylinder was found using the open source physics software Tracker. The analysis consisted of calibrating size to the reference stick, and then using autotracking on the cylinder motion. The data was then exported in a csv format to .txt files. These form the basis of the following analysis.
 
 ```{r setup, message=FALSE, warning=FALSE}
 library(tidyverse)
@@ -74,7 +74,7 @@ The vorticies in each video analyzed were counted by hand. In some cases this wa
 In other cases, this was a lot more difficult (*Note: gamma has been adjusted a lot in the below image to increase visibility*):
 ![A not so simple to count vortex street](images/not_so_easy_von_karman_street.png)
 
-As such, the vortex counts should be treated as rough estimates at best. In spite of this, as we will see later, the results still appear aligned with the literature. 
+As such, the vortex counts should be treated as rough estimates at best. In spite of this, as we will see later, the results appear aligned with the literature. 
 
 
 ### Velocity overview
@@ -152,17 +152,20 @@ points(
 ```
 
 ### Correlation
-As St should be fairly constant for Re, we would expect a Pearsons correlation coefficient close to 0. We will do this with and without the outlier (red dot in above plot). (*Note, cor.test also calculates p values ect*)
+As St is reported as approximately constant over the range of reynolds numbers seen in our data (Roshko, 1954), we expect a Pearsons correlation coefficient close to 0. We will do this with and without the outlier (red dot in above plot). (*Note, cor.test also calculates p values ect*)
 ```{r statistics}
+#With outlier
 cor.test(summary_df$Re, summary_df$St)
+
+#Without outlier
 cor.test(summary_df$Re[summary_df$run_number != 7], summary_df$St[summary_df$run_number != 7])
 ```
 *Correlation is value below "cor" in above output*
 
-Key point is that without the outlier, we get a correlation close to 0. Also note that for both calculations we do not have the statistical power to say that either correlation is meaningfully (p < 0.05) different from 0.
+We see that without the outlier, we get a correlation close to 0 - in line with what we would expect, while with the outlier the best fit curve has a pronounced negative slope. Note that in either case we do not have the statistical power (n=7) to say that either correlation is meaningfully (p < 0.05) different from 0.
 
-### Ensemble averaging
-As the Strohaul Number in the irregular range ($300 < Re < 10^4$) is reported to be approximately constant compared to Re (Roshko, 1954), we can meaningfully take the ensemble average over all runs to approximate the actual St. As with the previous cell, this will be done with and without the outlier.
+### Ensemble averaging - Results
+As the Strohaul Number in the irregular range ($300 < Re < 10^4$) is reported to be approximately constant compared to Re (Roshko, 1954), the differences in Re between the runs can be ignored and we can take the ensemble average over all runs to approximate St. As with the previous cell, this will be done with and without the outlier.
 ```{r ensemble averaging and final results}
 outlier_run_number <- 7
 
@@ -192,7 +195,7 @@ ensemble_results
 ```
 
 ### Using bootstrapping for confidence interval
-**Assuming my runs are representative of the underlying population**, we can use bootstrapping with the boot library in R to estimate the confidence interval.
+**Assuming my runs are representative of the underlying population**, we can use bootstrapping - i.e random resampling from our "representative" dataset to generate new samples (virtual draws) of the population - estimate the confidence interval. This will be done using the boot library in R.
 ```{r confidence interval}
 bootstrap_mean_draws <- function(x, R = 10000, seed = 42) {
   x <- x[!is.na(x)]
@@ -308,12 +311,12 @@ hist(
 abline(v = ci_without_outlier$mean_St, col = "blue", lwd = 2)
 abline(v = c(ci_without_outlier$ci95_lower, ci_without_outlier$ci95_upper), col = "red", lwd = 2, lty = 2)
 legend("topright", legend = c("Mean", "95% CI"), col = c("blue", "red"), lwd = 2, lty = c(1, 2), bty = "n", cex = 0.8)
-
-par(old_par)
 ```
-Based on the data in Roshko (1954), we expect a St number around 0.21, which is within the 95% confidence interval when we include the outlier, and just outside the confidence interval without the outlier (*note: but not outside both if confidence intervals are found assuming an underlying normal distribution*). 
 
-A final note on the distributions: As expected due the law of large numbers, both distributions appear approximately normal, but interestingly we see some skewness in the distribution that includes the outlier - perhaps indicative that this is truly an outlier, i.e the belongs to a different population than the other runs.
+### Discussion
+Based on the data in Roshko (1954), we expect a St number around 0.21, which is within the 95% confidence interval when we include the outlier, and just outside the confidence interval without the outlier (*note: but not outside both if confidence intervals are found assuming an underlying normal distribution*). As I believe the outlier result to be wrong - due to being so far outside of what is found in the literature, probably due to erroneous counting on my part - our result being below what is commonly reported in the literature might indicate a bias in my counting method, or be the result of other systematic factors in the way the experiment was performed. One possibility is that due to the short pull distance, the vortex streets are not fully developed at the start of each video.
+
+A final note on the distributions: As expected due the law of large numbers, both distributions appear approximately normal, but interestingly we see some skewness (and twin peaks) in the distribution that includes the outlier. This could possibly support my suspicion that this is truly an outlier, take as meaning that it belongs to a different population than the other runs. It could also be that my sample size is too small, breaking the assumption of representativeness that bootstrapping relies on, and that the distribution would smooth out if more runs would have been included in the dataset.
 
 
 ### References
